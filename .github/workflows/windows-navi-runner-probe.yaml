@@ -28,21 +28,6 @@ jobs:
             expected_python: ""
             expected_display_version: ""
             expected_edition: ""
-          - label: windows-gfx1151-gpu-rocm
-            expected_gfx: gfx1151
-            expected_python: ""
-            expected_display_version: ""
-            expected_edition: ""
-          - label: windows-gfx1101-gpu-rocm
-            expected_gfx: gfx1101
-            expected_python: "3.13.9"
-            expected_display_version: "24H2"
-            expected_edition: "Pro"
-          - label: windows-gfx1030-gpu-rocm
-            expected_gfx: gfx1030
-            expected_python: "3.13.9"
-            expected_display_version: "24H2"
-            expected_edition: "Pro"
 
     steps:
       - name: Probe OS, toolchain, Python, and GPU
