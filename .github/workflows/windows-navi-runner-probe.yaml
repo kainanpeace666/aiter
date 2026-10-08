@@ -463,3 +463,153 @@ jobs:
             }
             exit 1
           }
+
+  rocm-pip-install-gfx1201:
+    name: Try ROCm pip install (gfx1201)
+    runs-on: windows-gfx1201-gpu-rocm
+    timeout-minutes: 90
+    env:
+      GFX: gfx1201
+      ROCM_INDEX: https://stable.repo.amd.com/rocm/whl-next/
+      ROCM_VERSION: 10.1.0
+      TORCH_VERSION: 2.14.0+rocm10.1.0
+    steps:
+      - name: Checkout aiter repo
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+          sparse-checkout: |
+            aiter/jit/utils
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Cache pip wheels
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\pip\Cache
+          key: pip-${{ runner.os }}-${{ env.GFX }}-rocm${{ env.ROCM_VERSION }}-torch${{ env.TORCH_VERSION }}
+
+      - name: Install ROCm and PyTorch from ROCm pip index
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $venv = Join-Path $env:RUNNER_TEMP "aiter-rocm-pip-smoke"
+          if (Test-Path $venv) {
+            Remove-Item -Recurse -Force $venv
+          }
+
+          python --version
+          python -m venv $venv
+          $python = Join-Path $venv "Scripts\python.exe"
+          & $python --version
+          & $python -m pip install --upgrade pip
+
+          & $python -m pip install `
+            --index-url "$env:ROCM_INDEX" `
+            --extra-index-url https://pypi.org/simple `
+            "torch[device-$env:GFX]==$env:TORCH_VERSION" `
+            "rocm[devel]==$env:ROCM_VERSION"
+
+          $probe = @'
+          import importlib.util
+          import json
+          import os
+          import shutil
+          import sys
+          import traceback
+
+          result = {
+              "python": sys.version,
+              "python_executable": sys.executable,
+              "packages": {},
+              "executables": {},
+          }
+
+          try:
+              import torch
+
+              result["torch_version"] = torch.__version__
+              result["torch_version_hip"] = getattr(torch.version, "hip", None)
+              result["torch_cuda_compiled"] = bool(torch.cuda._is_compiled())
+              result["torch_cuda_available"] = bool(torch.cuda.is_available())
+              result["torch_cuda_device_count"] = int(torch.cuda.device_count())
+              if torch.cuda.is_available() and torch.cuda.device_count() > 0:
+                  props = torch.cuda.get_device_properties(0)
+                  result["torch_device_0"] = {
+                      "name": torch.cuda.get_device_name(0),
+                      "gcnArchName": getattr(props, "gcnArchName", None),
+                      "total_memory": getattr(props, "total_memory", None),
+                      "multi_processor_count": getattr(
+                          props, "multi_processor_count", None
+                      ),
+                  }
+          except Exception:
+              result["torch_error"] = traceback.format_exc()
+
+          for package in [
+              "_rocm_sdk_core",
+              "_rocm_sdk_devel",
+              "_rocm_sdk_device_gfx1201",
+              "_rocm_sdk_libraries",
+          ]:
+              try:
+                  spec = importlib.util.find_spec(package)
+                  result["packages"][package] = (
+                      os.path.dirname(spec.origin) if spec and spec.origin else None
+                  )
+              except Exception:
+                  result["packages"][package] = traceback.format_exc()
+
+          sys.path.insert(0, os.path.join(os.getcwd(), "aiter", "jit", "utils"))
+          try:
+              import cpp_extension
+
+              result["aiter_cpp_extension"] = {
+                  "ROCM_HOME": cpp_extension.ROCM_HOME,
+                  "HIP_HOME": cpp_extension.HIP_HOME,
+                  "IS_HIP_EXTENSION": cpp_extension.IS_HIP_EXTENSION,
+              }
+          except Exception:
+              result["aiter_cpp_extension_error"] = traceback.format_exc()
+
+          for executable in [
+              "hipcc",
+              "amdclang++",
+              "amdlld",
+              "hipconfig",
+              "hipinfo",
+              "rocminfo",
+              "amd-smi",
+              "rocm-smi",
+          ]:
+              result["executables"][executable] = shutil.which(executable)
+
+          print(json.dumps(result, indent=2, sort_keys=True))
+          '@
+          $probePath = Join-Path $env:RUNNER_TEMP "rocm_pip_install_probe.py"
+          $probe | Set-Content -Path $probePath -Encoding UTF8
+          $ErrorActionPreference = "Continue"
+          $probeOutput = & $python $probePath 2>&1 | Out-String
+          $probeExitCode = $global:LASTEXITCODE
+          $ErrorActionPreference = "Stop"
+          Write-Host $probeOutput
+
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "# ROCm pip install smoke"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Runner: ``$env:RUNNER_NAME``"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- GFX: ``$env:GFX``"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- ROCm version: ``$env:ROCM_VERSION``"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Torch version: ``$env:TORCH_VERSION``"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```json'
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $probeOutput.TrimEnd()
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```'
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Probe exit code: ``$probeExitCode``"
+          if ($probeExitCode -ne 0) {
+            exit $probeExitCode
+          }
