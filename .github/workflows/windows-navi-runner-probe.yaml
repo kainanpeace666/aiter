@@ -464,12 +464,24 @@ jobs:
             exit 1
           }
 
-  rocm-pip-install-gfx1201:
-    name: Try ROCm pip install (gfx1201)
-    runs-on: windows-gfx1201-gpu-rocm
+  rocm-pip-install:
+    name: Try ROCm pip install (${{ matrix.gfx }})
+    runs-on: ${{ matrix.label }}
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: windows-gfx1201-gpu-rocm
+            gfx: gfx1201
+          - label: windows-gfx1151-gpu-rocm
+            gfx: gfx1151
+          - label: windows-gfx1101-gpu-rocm
+            gfx: gfx1101
+          - label: windows-gfx1030-gpu-rocm
+            gfx: gfx1030
     env:
-      GFX: gfx1201
+      GFX: ${{ matrix.gfx }}
       ROCM_INDEX: https://stable.repo.amd.com/rocm/whl-next/
       ROCM_VERSION: 10.1.0
       TORCH_VERSION: 2.14.0+rocm10.1.0
@@ -522,7 +534,10 @@ jobs:
           import sys
           import traceback
 
+          gfx = os.environ.get("GFX", "")
+
           result = {
+              "gfx": gfx,
               "python": sys.version,
               "python_executable": sys.executable,
               "packages": {},
@@ -553,9 +568,11 @@ jobs:
           for package in [
               "_rocm_sdk_core",
               "_rocm_sdk_devel",
-              "_rocm_sdk_device_gfx1201",
+              f"_rocm_sdk_device_{gfx}" if gfx else "",
               "_rocm_sdk_libraries",
           ]:
+              if not package:
+                  continue
               try:
                   spec = importlib.util.find_spec(package)
                   result["packages"][package] = (
