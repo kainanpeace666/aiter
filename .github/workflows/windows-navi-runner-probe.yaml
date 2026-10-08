@@ -646,6 +646,10 @@ jobs:
 
       - name: Run AITER rms_norm op smoke
         shell: powershell
+        env:
+          AITER_USE_SYSTEM_TRITON: "1"
+          ENABLE_CK: "0"
+          PREBUILD_KERNELS: "0"
         run: |
           $ErrorActionPreference = "Stop"
           $venv = Join-Path $env:RUNNER_TEMP "aiter-rocm-pip-smoke"
