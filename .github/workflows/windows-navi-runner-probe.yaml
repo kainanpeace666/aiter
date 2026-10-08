@@ -1,0 +1,465 @@
+name: Windows Navi Runner Probe
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/windows-navi-runner-probe.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-navi-runner-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    name: Probe ${{ matrix.label }}
+    runs-on: ${{ matrix.label }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: windows-gfx1201-gpu-rocm
+            expected_gfx: gfx1201
+            expected_python: ""
+            expected_display_version: ""
+            expected_edition: ""
+          - label: windows-gfx1151-gpu-rocm
+            expected_gfx: gfx1151
+            expected_python: ""
+            expected_display_version: ""
+            expected_edition: ""
+          - label: windows-gfx1101-gpu-rocm
+            expected_gfx: gfx1101
+            expected_python: "3.13.9"
+            expected_display_version: "24H2"
+            expected_edition: "Pro"
+          - label: windows-gfx1030-gpu-rocm
+            expected_gfx: gfx1030
+            expected_python: "3.13.9"
+            expected_display_version: "24H2"
+            expected_edition: "Pro"
+
+    steps:
+      - name: Probe OS, toolchain, Python, and GPU
+        shell: powershell
+        env:
+          EXPECTED_LABEL: ${{ matrix.label }}
+          EXPECTED_GFX: ${{ matrix.expected_gfx }}
+          EXPECTED_PYTHON: ${{ matrix.expected_python }}
+          EXPECTED_DISPLAY_VERSION: ${{ matrix.expected_display_version }}
+          EXPECTED_EDITION: ${{ matrix.expected_edition }}
+        run: |
+          $ErrorActionPreference = "Continue"
+          $global:LASTEXITCODE = 0
+          $failures = [System.Collections.Generic.List[string]]::new()
+
+          function Add-Summary {
+            param([string]$Line)
+            $Line | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          }
+
+          function Add-Section {
+            param([string]$Title)
+            Add-Summary ""
+            Add-Summary "## $Title"
+          }
+
+          function Add-Failure {
+            param([string]$Message)
+            $script:failures.Add($Message)
+            Write-Error $Message
+            Add-Summary "- FAIL: $Message"
+          }
+
+          function Add-Check {
+            param(
+              [bool]$Condition,
+              [string]$PassMessage,
+              [string]$FailMessage
+            )
+            if ($Condition) {
+              Write-Host "PASS: $PassMessage"
+              Add-Summary "- PASS: $PassMessage"
+            } else {
+              Add-Failure $FailMessage
+            }
+          }
+
+          function Invoke-OptionalCommand {
+            param(
+              [string]$Name,
+              [string[]]$CommandArgs = @()
+            )
+            $cmd = Get-Command $Name -ErrorAction SilentlyContinue
+            if (-not $cmd) {
+              Write-Host "$Name not found on PATH"
+              Add-Summary "- ``$Name``: not found on PATH"
+              $global:LASTEXITCODE = 0
+              return
+            }
+
+            Add-Summary ""
+            Add-Summary "### $Name $($CommandArgs -join ' ')"
+            Add-Summary '```text'
+            try {
+              $output = & $cmd.Source @CommandArgs 2>&1 | Out-String
+              $exitCode = $global:LASTEXITCODE
+              if ([string]::IsNullOrWhiteSpace($output)) {
+                $output = "<no output>"
+              }
+              Write-Host $output
+              Add-Summary $output.TrimEnd()
+              Add-Summary ""
+              Add-Summary "Exit code: ``$exitCode``"
+            } catch {
+              Write-Warning "$Name failed: $_"
+              Add-Summary "Command failed: $_"
+            }
+            $global:LASTEXITCODE = 0
+            Add-Summary '```'
+          }
+
+          Add-Summary "# Windows Navi runner probe"
+          Add-Summary ""
+          Add-Summary "| Field | Value |"
+          Add-Summary "| --- | --- |"
+          Add-Summary "| Expected label | ``$env:EXPECTED_LABEL`` |"
+          Add-Summary "| Expected gfx | ``$env:EXPECTED_GFX`` |"
+          Add-Summary "| Runner name | ``$env:RUNNER_NAME`` |"
+          Add-Summary "| Runner OS | ``$env:RUNNER_OS`` |"
+          Add-Summary "| Runner arch | ``$env:RUNNER_ARCH`` |"
+          Add-Summary "| Computer name | ``$env:COMPUTERNAME`` |"
+          Add-Summary "| User | ``$env:USERNAME`` |"
+
+          Add-Section "OS"
+          try {
+            $computerInfo = Get-ComputerInfo
+            $productName = $computerInfo.WindowsProductName
+            if (-not $productName) {
+              $productName = $computerInfo.OsName
+            }
+            $displayVersion = $computerInfo.OsDisplayVersion
+            $windowsVersion = $computerInfo.WindowsVersion
+            $buildNumber = $computerInfo.OsBuildNumber
+            Add-Summary "| Field | Value |"
+            Add-Summary "| --- | --- |"
+            Add-Summary "| Product name | ``$productName`` |"
+            Add-Summary "| Display version | ``$displayVersion`` |"
+            Add-Summary "| Windows version | ``$windowsVersion`` |"
+            Add-Summary "| Build number | ``$buildNumber`` |"
+            Add-Summary "| OS name | ``$($computerInfo.OsName)`` |"
+
+            Add-Check ($productName -like "*Windows 11*" -or $computerInfo.OsName -like "*Windows 11*") `
+              "GPU runner reports Windows 11" `
+              "Expected Windows 11, got product='$productName' os='$($computerInfo.OsName)'"
+
+            if ($env:EXPECTED_DISPLAY_VERSION) {
+              Add-Check ($displayVersion -eq $env:EXPECTED_DISPLAY_VERSION) `
+                "Display version is $env:EXPECTED_DISPLAY_VERSION" `
+                "Expected display version $env:EXPECTED_DISPLAY_VERSION, got '$displayVersion'"
+            }
+
+            if ($env:EXPECTED_EDITION) {
+              Add-Check ($productName -like "*$env:EXPECTED_EDITION*" -or $computerInfo.OsName -like "*$env:EXPECTED_EDITION*") `
+                "Windows edition contains $env:EXPECTED_EDITION" `
+                "Expected Windows edition containing '$env:EXPECTED_EDITION', got product='$productName' os='$($computerInfo.OsName)'"
+            }
+          } catch {
+            Add-Failure "Get-ComputerInfo failed: $_"
+          }
+
+          Add-Section "Python"
+          $pythonVersion = ""
+          $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
+          if ($pythonCommand) {
+            $pythonVersionText = & $pythonCommand.Source --version 2>&1 | Out-String
+            $pythonVersionText = $pythonVersionText.Trim()
+            Add-Summary "- ``python``: ``$($pythonCommand.Source)``"
+            Add-Summary "- ``python --version``: ``$pythonVersionText``"
+            if ($pythonVersionText -match "Python\s+([0-9]+\.[0-9]+\.[0-9]+)") {
+              $pythonVersion = $Matches[1]
+            }
+          } else {
+            Add-Failure "python is not on PATH"
+          }
+
+          $pyCommand = Get-Command py -ErrorAction SilentlyContinue
+          if ($pyCommand) {
+            Invoke-OptionalCommand "py" @("-0p")
+          } else {
+            Add-Summary "- ``py`` launcher: not found on PATH"
+          }
+
+          if ($env:EXPECTED_PYTHON) {
+            Add-Check ($pythonVersion -eq $env:EXPECTED_PYTHON) `
+              "Python version is $env:EXPECTED_PYTHON" `
+              "Expected Python $env:EXPECTED_PYTHON, got '$pythonVersion'"
+          }
+
+          Add-Section "PyTorch GPU availability"
+          if ($pythonCommand) {
+            $torchProbe = @'
+          import json
+          import traceback
+
+          result = {
+              "torch_installed": False,
+              "import_error": "",
+              "torch_version": None,
+              "torch_version_hip": None,
+              "cuda_compiled": None,
+              "cuda_available": None,
+              "device_count": 0,
+              "devices": [],
+              "gpu_tests_supported": False,
+          }
+
+          try:
+              import torch
+
+              result["torch_installed"] = True
+              result["torch_version"] = getattr(torch, "__version__", None)
+              result["torch_version_hip"] = getattr(
+                  getattr(torch, "version", None), "hip", None
+              )
+
+              try:
+                  result["cuda_compiled"] = bool(torch.cuda._is_compiled())
+              except Exception as exc:
+                  result["cuda_compiled_error"] = repr(exc)
+
+              try:
+                  result["cuda_available"] = bool(torch.cuda.is_available())
+              except Exception as exc:
+                  result["cuda_available_error"] = repr(exc)
+
+              try:
+                  result["device_count"] = int(torch.cuda.device_count())
+              except Exception as exc:
+                  result["device_count_error"] = repr(exc)
+
+              if result["cuda_available"] and result["device_count"] > 0:
+                  for index in range(result["device_count"]):
+                      device = {"index": index}
+                      try:
+                          device["name"] = torch.cuda.get_device_name(index)
+                      except Exception as exc:
+                          device["name_error"] = repr(exc)
+                      try:
+                          props = torch.cuda.get_device_properties(index)
+                          device["gcnArchName"] = getattr(props, "gcnArchName", None)
+                          device["total_memory"] = getattr(props, "total_memory", None)
+                          device["multi_processor_count"] = getattr(
+                              props, "multi_processor_count", None
+                          )
+                      except Exception as exc:
+                          device["properties_error"] = repr(exc)
+                      result["devices"].append(device)
+
+              result["gpu_tests_supported"] = bool(
+                  result["cuda_available"] and result["device_count"] > 0
+              )
+          except Exception:
+              result["import_error"] = traceback.format_exc()
+
+          print("PYTORCH_GPU_PROBE_JSON:" + json.dumps(result, sort_keys=True))
+          '@
+            $torchProbePath = Join-Path $env:RUNNER_TEMP "torch_gpu_probe.py"
+            $torchProbe | Set-Content -Path $torchProbePath -Encoding UTF8
+            $torchProbeOutput = & $pythonCommand.Source $torchProbePath 2>&1 | Out-String
+            $torchProbeExitCode = $global:LASTEXITCODE
+            $global:LASTEXITCODE = 0
+
+            Add-Summary "### Raw probe output"
+            Add-Summary '```json'
+            Add-Summary $torchProbeOutput.TrimEnd()
+            Add-Summary '```'
+            Add-Summary "- Probe exit code: ``$torchProbeExitCode``"
+
+            try {
+              $torchProbeJsonPrefix = "PYTORCH_GPU_PROBE_JSON:"
+              $torchProbeJsonLine = ($torchProbeOutput -split "`r?`n" |
+                Where-Object { $_.StartsWith($torchProbeJsonPrefix) } |
+                Select-Object -Last 1)
+              if (-not $torchProbeJsonLine) {
+                throw "Probe output did not contain $torchProbeJsonPrefix"
+              }
+              $torchProbeJson = $torchProbeJsonLine.Substring($torchProbeJsonPrefix.Length)
+              $torchProbeResult = $torchProbeJson | ConvertFrom-Json
+              Add-Summary ""
+              Add-Summary "| Field | Value |"
+              Add-Summary "| --- | --- |"
+              Add-Summary "| torch installed | ``$($torchProbeResult.torch_installed)`` |"
+              Add-Summary "| torch version | ``$($torchProbeResult.torch_version)`` |"
+              Add-Summary "| torch.version.hip | ``$($torchProbeResult.torch_version_hip)`` |"
+              Add-Summary "| torch cuda compiled | ``$($torchProbeResult.cuda_compiled)`` |"
+              Add-Summary "| torch cuda available | ``$($torchProbeResult.cuda_available)`` |"
+              Add-Summary "| torch device count | ``$($torchProbeResult.device_count)`` |"
+              Add-Summary "| AITER GPU op tests | ``$(if ($torchProbeResult.gpu_tests_supported) { 'supported' } else { 'unavailable' })`` |"
+
+              if ($torchProbeResult.devices -and $torchProbeResult.devices.Count -gt 0) {
+                Add-Summary ""
+                Add-Summary "### PyTorch devices"
+                Add-Summary "| Index | Name | GCN arch | Total memory | CUs/SMs |"
+                Add-Summary "| --- | --- | --- | --- | --- |"
+                foreach ($device in $torchProbeResult.devices) {
+                  Add-Summary "| ``$($device.index)`` | ``$($device.name)`` | ``$($device.gcnArchName)`` | ``$($device.total_memory)`` | ``$($device.multi_processor_count)`` |"
+                }
+              }
+
+              if ($torchProbeResult.gpu_tests_supported) {
+                Write-Host "PyTorch GPU probe: AITER GPU op tests are supported."
+                Add-Summary ""
+                Add-Summary "- PASS: PyTorch can see a GPU; AITER GPU op tests can run on this runner."
+              } else {
+                $reason = "PyTorch cannot see a CUDA/HIP device."
+                if (-not $torchProbeResult.torch_installed) {
+                  $reason = "PyTorch is not installed or failed to import."
+                } elseif (-not $torchProbeResult.cuda_compiled) {
+                  $reason = "Installed PyTorch is not CUDA/HIP compiled."
+                } elseif (-not $torchProbeResult.cuda_available) {
+                  $reason = "Installed PyTorch is CUDA/HIP compiled but no CUDA/HIP device is available."
+                } elseif ([int]$torchProbeResult.device_count -le 0) {
+                  $reason = "Installed PyTorch reports zero CUDA/HIP devices."
+                }
+
+                Write-Host "PyTorch GPU probe: AITER GPU op tests unavailable. $reason"
+                Add-Summary ""
+                Add-Summary "- INFO: AITER GPU op tests unavailable: $reason"
+                if ($torchProbeResult.import_error) {
+                  Add-Summary ""
+                  Add-Summary "### PyTorch import error"
+                  Add-Summary '```text'
+                  Add-Summary $torchProbeResult.import_error.TrimEnd()
+                  Add-Summary '```'
+                }
+              }
+            } catch {
+              Write-Warning "Failed to parse PyTorch GPU probe output: $_"
+              Add-Summary ""
+              Add-Summary "- INFO: Failed to parse PyTorch GPU probe output: $_"
+            }
+          } else {
+            Add-Summary "- INFO: Skipping PyTorch GPU availability check because python is not on PATH."
+          }
+
+          Add-Section "Visual Studio and Windows SDK"
+          $vswhereCandidates = @(
+            "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe",
+            "${env:ProgramFiles}\Microsoft Visual Studio\Installer\vswhere.exe"
+          )
+          $vswhere = $vswhereCandidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+          if ($vswhere) {
+            Add-Summary "- ``vswhere``: ``$vswhere``"
+            Add-Summary ""
+            Add-Summary "### Visual Studio products"
+            Add-Summary '```text'
+            $vsOutput = & $vswhere -all -products "*" -format json 2>&1 | Out-String
+            Write-Host $vsOutput
+            Add-Summary $vsOutput.TrimEnd()
+            Add-Summary '```'
+          } else {
+            Add-Summary "- ``vswhere``: not found"
+          }
+
+          $sdkRoots = @(
+            "${env:ProgramFiles(x86)}\Windows Kits\10\Lib",
+            "${env:ProgramFiles}\Windows Kits\10\Lib"
+          )
+          $sdkVersions = @()
+          foreach ($root in $sdkRoots) {
+            if (Test-Path $root) {
+              $sdkVersions += Get-ChildItem $root -Directory -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
+            }
+          }
+          $sdkVersions = $sdkVersions | Sort-Object -Unique
+          if ($sdkVersions.Count -gt 0) {
+            Add-Summary "- Windows SDK versions: ``$($sdkVersions -join ', ')``"
+          } else {
+            Add-Summary "- Windows SDK versions: none found under Windows Kits 10 Lib"
+          }
+
+          Add-Section "GPU and ROCm"
+          try {
+            Add-Summary "### Win32_VideoController"
+            Add-Summary '```text'
+            $video = Get-CimInstance Win32_VideoController |
+              Select-Object Name, PNPDeviceID, AdapterRAM, DriverVersion, DriverDate |
+              Format-Table -AutoSize | Out-String
+            Write-Host $video
+            Add-Summary $video.TrimEnd()
+            Add-Summary '```'
+          } catch {
+            Add-Summary "Win32_VideoController query failed: $_"
+          }
+
+          try {
+            Add-Summary "### Display PnP devices"
+            Add-Summary '```text'
+            $pnp = Get-PnpDevice -Class Display -ErrorAction SilentlyContinue |
+              Select-Object Status, Class, FriendlyName, InstanceId |
+              Format-Table -AutoSize | Out-String
+            Write-Host $pnp
+            Add-Summary $pnp.TrimEnd()
+            Add-Summary '```'
+          } catch {
+            Add-Summary "Get-PnpDevice query failed: $_"
+          }
+
+          $envCandidates = @(
+            "HIP_VISIBLE_DEVICES",
+            "ROCR_VISIBLE_DEVICES",
+            "GPU_DEVICE_ORDINAL",
+            "ROCM_PATH",
+            "ROCM_HOME",
+            "ROCM_PATH_TEST"
+          )
+          Add-Summary "### ROCm-related environment"
+          Add-Summary "| Name | Value |"
+          Add-Summary "| --- | --- |"
+          foreach ($name in $envCandidates) {
+            Add-Summary "| ``$name`` | ``$([Environment]::GetEnvironmentVariable($name))`` |"
+          }
+
+          $rocmRoots = @(
+            $env:ROCM_PATH,
+            $env:ROCM_HOME,
+            $env:ROCM_PATH_TEST,
+            "C:\TheRock\build",
+            "C:\Program Files\AMD\ROCm",
+            "C:\Program Files\AMD\ROCm\bin"
+          ) | Where-Object { $_ } | Sort-Object -Unique
+          Add-Summary "### ROCm path candidates"
+          foreach ($root in $rocmRoots) {
+            Add-Summary "- ``$root``: $(if (Test-Path $root) { 'exists' } else { 'missing' })"
+          }
+
+          Invoke-OptionalCommand "where.exe" @("python")
+          Invoke-OptionalCommand "where.exe" @("hipinfo")
+          Invoke-OptionalCommand "where.exe" @("rocminfo")
+          Invoke-OptionalCommand "where.exe" @("amd-smi")
+          Invoke-OptionalCommand "where.exe" @("rocm-smi")
+          Invoke-OptionalCommand "hipconfig" @("--version")
+          Invoke-OptionalCommand "hipinfo" @()
+          Invoke-OptionalCommand "rocminfo" @()
+          Invoke-OptionalCommand "amd-smi" @("static", "--asic", "--driver")
+          Invoke-OptionalCommand "rocm-smi" @("--showproductname")
+
+          Add-Section "Assertions"
+          if ($failures.Count -eq 0) {
+            Add-Summary "All hard checks passed."
+            Write-Host "All hard checks passed."
+            exit 0
+          } else {
+            Add-Summary ""
+            Add-Summary "Hard check failures:"
+            foreach ($failure in $failures) {
+              Add-Summary "- $failure"
+            }
+            exit 1
+          }
