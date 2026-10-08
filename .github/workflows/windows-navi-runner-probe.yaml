@@ -638,6 +638,8 @@ jobs:
             psutil `
             packaging `
             einops `
+            pyyaml `
+            numpy `
             triton-windows
 
           & $python -m pip install -e . --no-build-isolation -v
