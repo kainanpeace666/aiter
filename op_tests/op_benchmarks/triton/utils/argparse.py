@@ -37,6 +37,13 @@ def get_parser(kernel_name: str) -> argparse.ArgumentParser:
         default="throughput",
         help="metric to plot",
     )
+    parser.add_argument(
+        "--backend",
+        type=str,
+        choices=["triton", "gluon", "auto"],
+        default="auto",
+        help="Backend to use. Default: auto-detect."
+    )
     return parser
 
 
@@ -109,5 +116,8 @@ def add_argparse_ff(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "-o", action="store_true", help="Write performance results to CSV file"
+    )
+    parser.add_argument(
+        "-r", action="store_true", help="Benchmark with rotating buffers for input"
     )
     return parser
