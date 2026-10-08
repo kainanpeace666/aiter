@@ -464,13 +464,15 @@ jobs:
             exit 1
           }
 
+      - name: Configure Git long paths
+        shell: powershell
+        run: git config --global core.longpaths true
+
       - name: Checkout aiter repo
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 1
-          sparse-checkout: |
-            aiter/jit/utils
 
       - name: Set up Python 3.13
         uses: actions/setup-python@v5
@@ -615,3 +617,61 @@ jobs:
           if ($probeExitCode -ne 0) {
             exit $probeExitCode
           }
+
+      - name: Install aiter
+        shell: powershell
+        env:
+          AITER_USE_SYSTEM_TRITON: "1"
+          ENABLE_CK: "0"
+          PREBUILD_KERNELS: "0"
+        run: |
+          $ErrorActionPreference = "Stop"
+          $venv = Join-Path $env:RUNNER_TEMP "aiter-rocm-pip-smoke"
+          $python = Join-Path $venv "Scripts\python.exe"
+
+          & $python -m pip install --upgrade `
+            wheel `
+            "setuptools_scm<10" `
+            "pybind11>=3.0.1" `
+            "ninja>=1.11.1" `
+            pandas `
+            psutil `
+            packaging `
+            einops
+
+          & $python -m pip install -e . --no-build-isolation -v
+
+      - name: Run AITER rms_norm op smoke
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $venv = Join-Path $env:RUNNER_TEMP "aiter-rocm-pip-smoke"
+          $python = Join-Path $venv "Scripts\python.exe"
+
+          $smoke = @'
+          import torch
+          import torch.nn.functional as F
+          import aiter
+
+          torch.manual_seed(0)
+          device = "cuda"
+          dtype = torch.float16
+          eps = 1e-5
+          x = torch.randn((4, 128), device=device, dtype=dtype)
+          weight = torch.randn((128,), device=device, dtype=dtype)
+
+          y = aiter.rms_norm(x, weight, eps)
+          ref = F.rms_norm(x.float(), (128,), weight.float(), eps).to(dtype)
+          torch.testing.assert_close(y, ref, rtol=1e-2, atol=1e-2)
+          torch.cuda.synchronize()
+
+          print("aiter rms_norm smoke OK")
+          print("torch", torch.__version__)
+          print("hip", torch.version.hip)
+          print("device", torch.cuda.get_device_name(0))
+          print("arch", torch.cuda.get_device_properties(0).gcnArchName)
+          print("aiter", aiter.__file__)
+          '@
+          $smokePath = Join-Path $env:RUNNER_TEMP "aiter_rmsnorm_smoke.py"
+          $smoke | Set-Content -Path $smokePath -Encoding UTF8
+          & $python $smokePath
