@@ -18,7 +18,7 @@ jobs:
   probe:
     name: Probe ${{ matrix.label }}
     runs-on: ${{ matrix.label }}
-    timeout-minutes: 20
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -464,28 +464,6 @@ jobs:
             exit 1
           }
 
-  rocm-pip-install:
-    name: Try ROCm pip install (${{ matrix.gfx }})
-    runs-on: ${{ matrix.label }}
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - label: windows-gfx1201-gpu-rocm
-            gfx: gfx1201
-          - label: windows-gfx1151-gpu-rocm
-            gfx: gfx1151
-          - label: windows-gfx1101-gpu-rocm
-            gfx: gfx1101
-          - label: windows-gfx1030-gpu-rocm
-            gfx: gfx1030
-    env:
-      GFX: ${{ matrix.gfx }}
-      ROCM_INDEX: https://stable.repo.amd.com/rocm/whl-next/
-      ROCM_VERSION: 10.1.0
-      TORCH_VERSION: 2.14.0+rocm10.1.0
-    steps:
       - name: Checkout aiter repo
         uses: actions/checkout@v4
         with:
@@ -503,10 +481,15 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~\AppData\Local\pip\Cache
-          key: pip-${{ runner.os }}-${{ env.GFX }}-rocm${{ env.ROCM_VERSION }}-torch${{ env.TORCH_VERSION }}
+          key: pip-${{ runner.os }}-${{ matrix.expected_gfx }}-rocm10.1.0-torch2.14.0+rocm10.1.0
 
       - name: Install ROCm and PyTorch from ROCm pip index
         shell: powershell
+        env:
+          GFX: ${{ matrix.expected_gfx }}
+          ROCM_INDEX: https://stable.repo.amd.com/rocm/whl-next/
+          ROCM_VERSION: 10.1.0
+          TORCH_VERSION: 2.14.0+rocm10.1.0
         run: |
           $ErrorActionPreference = "Stop"
           $venv = Join-Path $env:RUNNER_TEMP "aiter-rocm-pip-smoke"
