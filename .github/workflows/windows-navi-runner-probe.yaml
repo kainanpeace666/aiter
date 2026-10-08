@@ -507,7 +507,9 @@ jobs:
             --index-url "$env:ROCM_INDEX" `
             --extra-index-url https://pypi.org/simple `
             "torch[device-$env:GFX]==$env:TORCH_VERSION" `
-            "rocm[devel]==$env:ROCM_VERSION"
+            "rocm[devel,device-$env:GFX]==$env:ROCM_VERSION"
+
+          & $python -m rocm_sdk init
 
           $probe = @'
           import importlib.util
