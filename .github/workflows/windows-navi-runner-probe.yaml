@@ -637,7 +637,8 @@ jobs:
             pandas `
             psutil `
             packaging `
-            einops
+            einops `
+            triton-windows
 
           & $python -m pip install -e . --no-build-isolation -v
 
